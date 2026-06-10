@@ -1,0 +1,32 @@
+[package]
+name = "tron-core"
+version = "0.1.0"
+edition = "2021"
+description = "Core TRON wallet logic: keys, addresses, keystore, signing, TronGrid client"
+
+[dependencies]
+# Mnemonics / HD key derivation
+bip39 = "2"
+bip32 = "0.5"
+
+# Cryptography (secp256k1, hashing, AEAD, KDF)
+k256 = { version = "0.13", features = ["ecdsa"] }
+sha2 = "0.10"
+sha3 = "0.10"
+bs58 = "0.5"
+aes-gcm = "0.10"
+argon2 = "0.5"
+rand_core = { version = "0.6", features = ["std"] }
+zeroize = { version = "1", features = ["derive"] }
+
+# Networking
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+
+# Serialization / errors / encoding
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+hex = "0.4"
+thiserror = "2"
+
+[dev-dependencies]
+tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
