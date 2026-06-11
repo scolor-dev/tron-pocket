@@ -1,7 +1,14 @@
 import { defineStore } from "pinia";
 import { ref } from "vue";
 import { api } from "@/lib/tauri-api";
-import type { Balances, CreateWalletResult, Network } from "@/types";
+import type { Balances, CreateWalletResult, Network, ResourceInfo } from "@/types";
+
+const EMPTY_RESOURCES: ResourceInfo = {
+  bandwidth_available: 0,
+  bandwidth_limit: 0,
+  energy_available: 0,
+  energy_limit: 0,
+};
 
 export const useWalletStore = defineStore("wallet", () => {
   const statusLoaded = ref(false);
@@ -12,6 +19,9 @@ export const useWalletStore = defineStore("wallet", () => {
 
   const balances = ref<Balances>({ trx: "0", usdt: "0" });
   const balancesLoading = ref(false);
+
+  const resources = ref<ResourceInfo>({ ...EMPTY_RESOURCES });
+  const resourcesLoading = ref(false);
 
   async function refreshStatus() {
     const status = await api.walletStatus();
@@ -29,6 +39,16 @@ export const useWalletStore = defineStore("wallet", () => {
       balances.value = await api.getBalances();
     } finally {
       balancesLoading.value = false;
+    }
+  }
+
+  async function refreshResources() {
+    if (!unlocked.value) return;
+    resourcesLoading.value = true;
+    try {
+      resources.value = await api.getResources();
+    } finally {
+      resourcesLoading.value = false;
     }
   }
 
@@ -57,6 +77,7 @@ export const useWalletStore = defineStore("wallet", () => {
     await api.setNetwork(next);
     await refreshStatus();
     await refreshBalances();
+    await refreshResources();
   }
 
   return {
@@ -67,8 +88,11 @@ export const useWalletStore = defineStore("wallet", () => {
     network,
     balances,
     balancesLoading,
+    resources,
+    resourcesLoading,
     refreshStatus,
     refreshBalances,
+    refreshResources,
     createWallet,
     importWallet,
     unlock,

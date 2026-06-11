@@ -1,9 +1,10 @@
 use crate::error::{AppError, AppResult};
 use crate::state::AppState;
 use k256::ecdsa::SigningKey;
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use tauri::State;
-use tron_core::client::{Network, TronClient};
+use tron_core::client::{estimate_bandwidth_bytes, Network, TronClient};
 use tron_core::{address, sign, trc20, units};
 
 #[tauri::command]
@@ -65,6 +66,96 @@ pub async fn send_trc20(
 
     let signed = sign_created_transaction(&signing_key, &created)?;
     broadcast(&client, signed, &created.tx_id).await
+}
+
+#[derive(Debug, Clone, Copy, Deserialize)]
+#[serde(rename_all = "UPPERCASE")]
+pub enum FeeToken {
+    Trx,
+    Usdt,
+}
+
+#[derive(Serialize)]
+pub struct FeeEstimate {
+    pub bandwidth_required: u64,
+    pub bandwidth_available: u64,
+    pub energy_required: u64,
+    pub energy_available: u64,
+    /// Estimated network fee paid in TRX (decimal string), for whatever
+    /// portion of bandwidth/energy exceeds the account's free/staked allowance.
+    pub estimated_fee_trx: String,
+}
+
+/// Estimate the network fee for sending `amount` of `token` to `to`, based on
+/// the sender's current bandwidth/energy allowance. Does not require the
+/// wallet to be unlocked - it only inspects the account's public address.
+#[tauri::command]
+pub async fn estimate_fee(
+    state: State<'_, AppState>,
+    token: FeeToken,
+    to: String,
+    amount: String,
+    contract: Option<String>,
+) -> AppResult<FeeEstimate> {
+    if !address::is_valid(&to) {
+        return Err(AppError::InvalidAddress(to));
+    }
+
+    let (network, owner_b58) = {
+        let inner = state.0.lock().unwrap();
+        let address = inner.address().ok_or(AppError::NoWallet)?;
+        (inner.network, address)
+    };
+
+    let owner_hex = address::base58_to_hex(&owner_b58)?;
+    let to_hex = address::base58_to_hex(&to)?;
+    let client = TronClient::new(network);
+
+    let resources = client.get_account_resources(&owner_hex).await?;
+    let bandwidth_available = (resources.free_net_limit + resources.net_limit)
+        .saturating_sub(resources.free_net_used + resources.net_used);
+    let energy_available = resources.energy_limit.saturating_sub(resources.energy_used);
+    let chain_params = client.get_chain_parameters().await?;
+
+    let (bandwidth_required, energy_required) = match token {
+        FeeToken::Trx => {
+            let amount_sun = units::to_smallest_unit(&amount, 6)?;
+            if amount_sun > u64::MAX as u128 {
+                return Err(AppError::Other("amount too large".into()));
+            }
+            let created = client
+                .create_trx_transfer(&owner_hex, &to_hex, amount_sun as u64)
+                .await?;
+            (estimate_bandwidth_bytes(&created.raw_data_hex), 0)
+        }
+        FeeToken::Usdt => {
+            let to_bytes = address::from_base58(&to)?;
+            let contract_b58 = contract.unwrap_or_else(|| trc20::contracts::USDT_MAINNET.to_string());
+            let contract_hex = address::base58_to_hex(&contract_b58)?;
+            let amount_units = units::to_smallest_unit(&amount, 6)?;
+
+            let energy_required = client
+                .estimate_trc20_transfer_energy(&owner_hex, &contract_hex, &to_bytes, amount_units)
+                .await?;
+            let created = client
+                .create_trc20_transfer(&owner_hex, &contract_hex, &to_bytes, amount_units)
+                .await?;
+            (estimate_bandwidth_bytes(&created.raw_data_hex), energy_required)
+        }
+    };
+
+    let bandwidth_shortfall = bandwidth_required.saturating_sub(bandwidth_available);
+    let energy_shortfall = energy_required.saturating_sub(energy_available);
+    let fee_sun = bandwidth_shortfall * chain_params.bandwidth_fee_sun
+        + energy_shortfall * chain_params.energy_fee_sun;
+
+    Ok(FeeEstimate {
+        bandwidth_required,
+        bandwidth_available,
+        energy_required,
+        energy_available,
+        estimated_fee_trx: units::from_smallest_unit(fee_sun as u128, 6),
+    })
 }
 
 /// Extract (network, signing key, owner address hex) from the unlocked wallet,

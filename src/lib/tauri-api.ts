@@ -1,5 +1,14 @@
 import { invoke } from "@tauri-apps/api/core";
-import type { Balances, CreateWalletResult, Network, TronTransactionPage, WalletStatus } from "@/types";
+import type {
+  Balances,
+  CreateWalletResult,
+  FeeEstimate,
+  Network,
+  ResourceInfo,
+  SendToken,
+  TronTransactionPage,
+  WalletStatus,
+} from "@/types";
 
 /** Typed wrappers around `invoke()` for every Tauri command exposed by src-tauri. */
 export const api = {
@@ -14,9 +23,12 @@ export const api = {
   setNetwork: (network: Network) => invoke<void>("set_network", { network }),
 
   getBalances: () => invoke<Balances>("get_balances"),
+  getResources: () => invoke<ResourceInfo>("get_resources"),
   getTransactionHistory: () => invoke<TronTransactionPage>("get_transaction_history"),
 
   sendTrx: (to: string, amount: string) => invoke<string>("send_trx", { to, amount }),
   sendTrc20: (to: string, amount: string, contract?: string) =>
     invoke<string>("send_trc20", { to, amount, contract }),
+  estimateFee: (token: SendToken, to: string, amount: string, contract?: string) =>
+    invoke<FeeEstimate>("estimate_fee", { token, to, amount, contract }),
 };

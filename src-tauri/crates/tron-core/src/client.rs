@@ -34,6 +34,75 @@ pub struct AccountBalance {
     pub trx_sun: u64,
 }
 
+/// Bandwidth and Energy usage/limits for an account, from `/wallet/getaccountresources`.
+/// Fields are absent from the API response (and default to 0) when an account
+/// has no free or staked allowance of that kind.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct AccountResources {
+    #[serde(rename = "freeNetUsed", default)]
+    pub free_net_used: u64,
+    #[serde(rename = "freeNetLimit", default)]
+    pub free_net_limit: u64,
+    #[serde(rename = "NetUsed", default)]
+    pub net_used: u64,
+    #[serde(rename = "NetLimit", default)]
+    pub net_limit: u64,
+    #[serde(rename = "EnergyUsed", default)]
+    pub energy_used: u64,
+    #[serde(rename = "EnergyLimit", default)]
+    pub energy_limit: u64,
+}
+
+/// Network fee parameters relevant to estimating transaction costs, from
+/// `/wallet/getchainparameters`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ChainParameters {
+    /// Cost in SUN per byte of bandwidth consumed beyond an account's free/staked allowance.
+    pub bandwidth_fee_sun: u64,
+    /// Cost in SUN per unit of energy consumed beyond an account's staked allowance.
+    pub energy_fee_sun: u64,
+}
+
+impl Default for ChainParameters {
+    fn default() -> Self {
+        // TRON mainnet defaults as of 2024; used as a fallback if the chain
+        // parameter is missing from the response for any reason.
+        Self {
+            bandwidth_fee_sun: 1000,
+            energy_fee_sun: 100,
+        }
+    }
+}
+
+/// Parse the `chainParameter: [{key, value}]` array returned by
+/// `/wallet/getchainparameters`, falling back to [`ChainParameters::default`]
+/// values for any parameter that isn't present.
+fn parse_chain_parameters(value: &Value) -> ChainParameters {
+    let defaults = ChainParameters::default();
+    let find = |key: &str, default: u64| -> u64 {
+        value["chainParameter"]
+            .as_array()
+            .and_then(|params| params.iter().find(|p| p["key"] == key))
+            .and_then(|p| p["value"].as_u64())
+            .unwrap_or(default)
+    };
+
+    ChainParameters {
+        bandwidth_fee_sun: find("getTransactionFee", defaults.bandwidth_fee_sun),
+        energy_fee_sun: find("getEnergyFee", defaults.energy_fee_sun),
+    }
+}
+
+/// Estimate the bandwidth (in bytes) a signed transaction will consume,
+/// given the hex-encoded `raw_data` of the unsigned transaction.
+///
+/// This is `len(raw_data) + len(signature)`, plus a small constant for the
+/// protobuf field overhead of the appended signature.
+pub fn estimate_bandwidth_bytes(raw_data_hex: &str) -> u64 {
+    const SIGNATURE_AND_OVERHEAD_BYTES: u64 = 67;
+    (raw_data_hex.len() / 2) as u64 + SIGNATURE_AND_OVERHEAD_BYTES
+}
+
 /// A transaction built by TronGrid, ready to be signed.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CreatedTransaction {
@@ -95,6 +164,42 @@ impl TronClient {
             return Ok(0);
         }
         u128::from_str_radix(result_hex, 16).map_err(|e| CoreError::Encoding(e.to_string()))
+    }
+
+    /// Fetch the bandwidth/energy usage and limits for an account.
+    pub async fn get_account_resources(&self, address_hex: &str) -> Result<AccountResources> {
+        let url = format!("{}/wallet/getaccountresources", self.base_url);
+        let body = json!({ "address": address_hex, "visible": false });
+        let resp: Value = self.http.post(&url).json(&body).send().await?.json().await?;
+        serde_json::from_value(resp).map_err(CoreError::from)
+    }
+
+    /// Fetch network-wide fee parameters (bandwidth/energy price in SUN).
+    pub async fn get_chain_parameters(&self) -> Result<ChainParameters> {
+        let url = format!("{}/wallet/getchainparameters", self.base_url);
+        let resp: Value = self.http.get(&url).send().await?.json().await?;
+        Ok(parse_chain_parameters(&resp))
+    }
+
+    /// Estimate the energy a TRC20 `transfer(address,uint256)` call will consume,
+    /// via a constant (read-only) contract call.
+    pub async fn estimate_trc20_transfer_energy(
+        &self,
+        owner_address_hex: &str,
+        contract_address_hex: &str,
+        to_address: &[u8; 21],
+        amount: u128,
+    ) -> Result<u64> {
+        let parameter = trc20::encode_transfer(to_address, amount);
+        let resp = self
+            .trigger_constant_contract(
+                owner_address_hex,
+                contract_address_hex,
+                trc20::TRANSFER_SELECTOR,
+                &parameter,
+            )
+            .await?;
+        Ok(resp["energy_used"].as_u64().unwrap_or(0))
     }
 
     /// Fetch recent transactions for an address (newest first).
@@ -180,5 +285,73 @@ impl TronClient {
             return Err(CoreError::Node(err.to_string()));
         }
         serde_json::from_value(resp).map_err(CoreError::from)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn account_resources_full_response() {
+        let value = json!({
+            "freeNetUsed": 557,
+            "freeNetLimit": 5000,
+            "NetUsed": 261,
+            "NetLimit": 5239057,
+            "TotalNetLimit": 43200000000_u64,
+            "TotalNetWeight": 41884116364_u64,
+            "EnergyUsed": 30150,
+            "EnergyLimit": 32360,
+        });
+        let resources: AccountResources = serde_json::from_value(value).unwrap();
+        assert_eq!(resources.free_net_used, 557);
+        assert_eq!(resources.free_net_limit, 5000);
+        assert_eq!(resources.net_used, 261);
+        assert_eq!(resources.net_limit, 5239057);
+        assert_eq!(resources.energy_used, 30150);
+        assert_eq!(resources.energy_limit, 32360);
+    }
+
+    #[test]
+    fn account_resources_missing_fields_default_to_zero() {
+        // An account with only free bandwidth (no staked NET/Energy) omits
+        // the NetUsed/NetLimit/EnergyUsed/EnergyLimit fields entirely.
+        let value = json!({ "freeNetUsed": 100, "freeNetLimit": 600 });
+        let resources: AccountResources = serde_json::from_value(value).unwrap();
+        assert_eq!(resources.free_net_used, 100);
+        assert_eq!(resources.free_net_limit, 600);
+        assert_eq!(resources.net_used, 0);
+        assert_eq!(resources.net_limit, 0);
+        assert_eq!(resources.energy_used, 0);
+        assert_eq!(resources.energy_limit, 0);
+    }
+
+    #[test]
+    fn parses_chain_parameters() {
+        let value = json!({
+            "chainParameter": [
+                { "key": "getMaintenanceTimeInterval", "value": 21_600_000 },
+                { "key": "getTransactionFee", "value": 1000 },
+                { "key": "getEnergyFee", "value": 210 },
+            ]
+        });
+        let params = parse_chain_parameters(&value);
+        assert_eq!(params.bandwidth_fee_sun, 1000);
+        assert_eq!(params.energy_fee_sun, 210);
+    }
+
+    #[test]
+    fn chain_parameters_fall_back_to_defaults_when_missing() {
+        let value = json!({ "chainParameter": [] });
+        let params = parse_chain_parameters(&value);
+        assert_eq!(params, ChainParameters::default());
+    }
+
+    #[test]
+    fn estimates_bandwidth_from_raw_data_hex() {
+        // 100 hex chars = 50 bytes of raw_data.
+        let raw_data_hex = "00".repeat(50);
+        assert_eq!(estimate_bandwidth_bytes(&raw_data_hex), 50 + 67);
     }
 }

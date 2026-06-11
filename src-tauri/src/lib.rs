@@ -31,9 +31,11 @@ pub fn run() {
             commands::network::get_network,
             commands::network::set_network,
             commands::balance::get_balances,
+            commands::balance::get_resources,
             commands::transaction::get_transaction_history,
             commands::transaction::send_trx,
             commands::transaction::send_trc20,
+            commands::transaction::estimate_fee,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

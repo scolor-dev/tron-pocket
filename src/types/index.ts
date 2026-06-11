@@ -17,6 +17,24 @@ export interface Balances {
   usdt: string;
 }
 
+export type SendToken = "TRX" | "USDT";
+
+export interface ResourceInfo {
+  bandwidth_available: number;
+  bandwidth_limit: number;
+  energy_available: number;
+  energy_limit: number;
+}
+
+export interface FeeEstimate {
+  bandwidth_required: number;
+  bandwidth_available: number;
+  energy_required: number;
+  energy_available: number;
+  /** Estimated network fee in TRX, as a decimal string (e.g. "0.27"). */
+  estimated_fee_trx: string;
+}
+
 export type AppErrorKind =
   | "InvalidMnemonic"
   | "InvalidPrivateKey"

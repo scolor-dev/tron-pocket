@@ -4,6 +4,7 @@ import { useWalletStore } from "@/stores/wallet";
 import { NETWORK_INFO, USDT_CONTRACT_MAINNET } from "@/lib/constants";
 import { formatError, shortenTxId } from "@/lib/format";
 import { api } from "@/lib/tauri-api";
+import type { FeeEstimate } from "@/types";
 import Button from "@/components/ui/Button.vue";
 import Input from "@/components/ui/Input.vue";
 import Modal from "@/components/ui/Modal.vue";
@@ -22,6 +23,10 @@ const fieldErrors = ref<{ to?: string; amount?: string }>({});
 const showConfirm = ref(false);
 const sending = ref(false);
 const txId = ref<string | null>(null);
+
+const feeEstimate = ref<FeeEstimate | null>(null);
+const feeLoading = ref(false);
+const feeError = ref(false);
 
 const explorerTxUrl = computed(() => (txId.value ? `${NETWORK_INFO[wallet.network].explorerTxUrl}${txId.value}` : ""));
 
@@ -42,6 +47,21 @@ function openConfirm() {
   txId.value = null;
   if (!validate()) return;
   showConfirm.value = true;
+  loadFeeEstimate();
+}
+
+async function loadFeeEstimate() {
+  feeEstimate.value = null;
+  feeError.value = false;
+  feeLoading.value = true;
+  try {
+    const contract = token.value === "USDT" ? USDT_CONTRACT_MAINNET : undefined;
+    feeEstimate.value = await api.estimateFee(token.value, toAddress.value, amount.value, contract);
+  } catch {
+    feeError.value = true;
+  } finally {
+    feeLoading.value = false;
+  }
 }
 
 async function confirmSend() {
@@ -114,7 +134,24 @@ async function confirmSend() {
           <span class="block text-gray-400">宛先</span>
           <span class="font-mono text-xs text-gray-100">{{ toAddress }}</span>
         </div>
+        <div class="flex justify-between border-t border-surface-border pt-2">
+          <span class="text-gray-400">ネットワーク手数料</span>
+          <span class="text-gray-100">
+            <span v-if="feeLoading" class="text-gray-500">見積もり中...</span>
+            <span v-else-if="feeEstimate">
+              {{ feeEstimate.estimated_fee_trx === "0" ? "無料" : `約 ${feeEstimate.estimated_fee_trx} TRX` }}
+            </span>
+            <span v-else class="text-gray-500">-</span>
+          </span>
+        </div>
       </div>
+      <p
+        v-if="feeEstimate && feeEstimate.energy_required > feeEstimate.energy_available"
+        class="mt-2 text-xs text-gray-500"
+      >
+        エネルギーが不足しているため、不足分はTRXの手数料として消費されます。
+      </p>
+      <p v-if="feeError" class="mt-2 text-xs text-gray-500">手数料を見積もれませんでした。</p>
       <p v-if="error" class="mt-3 text-sm text-red-400">{{ error }}</p>
 
       <template #footer>

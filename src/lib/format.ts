@@ -10,6 +10,11 @@ export function shortenTxId(txId: string, chars = 8): string {
   return shortenAddress(txId, chars);
 }
 
+/** Format an integer with thousands separators (e.g. bandwidth/energy counts). */
+export function formatNumber(value: number): string {
+  return value.toLocaleString("ja-JP");
+}
+
 const ERROR_MESSAGES: Record<AppError["kind"], string> = {
   InvalidMnemonic: "リカバリーフレーズが正しくありません。",
   InvalidPrivateKey: "秘密鍵が正しくありません。",

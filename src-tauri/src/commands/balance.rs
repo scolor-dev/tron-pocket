@@ -41,3 +41,34 @@ pub async fn get_balances(state: State<'_, AppState>) -> AppResult<Balances> {
 
     Ok(Balances { trx, usdt })
 }
+
+#[derive(Serialize)]
+pub struct ResourceInfo {
+    pub bandwidth_available: u64,
+    pub bandwidth_limit: u64,
+    pub energy_available: u64,
+    pub energy_limit: u64,
+}
+
+#[tauri::command]
+pub async fn get_resources(state: State<'_, AppState>) -> AppResult<ResourceInfo> {
+    let (network, address_b58) = {
+        let inner = state.0.lock().unwrap();
+        let address = inner.address().ok_or(AppError::NoWallet)?;
+        (inner.network, address)
+    };
+
+    let address_hex = address::base58_to_hex(&address_b58)?;
+    let client = TronClient::new(network);
+    let resources = client.get_account_resources(&address_hex).await?;
+
+    let bandwidth_limit = resources.free_net_limit + resources.net_limit;
+    let bandwidth_used = resources.free_net_used + resources.net_used;
+
+    Ok(ResourceInfo {
+        bandwidth_available: bandwidth_limit.saturating_sub(bandwidth_used),
+        bandwidth_limit,
+        energy_available: resources.energy_limit.saturating_sub(resources.energy_used),
+        energy_limit: resources.energy_limit,
+    })
+}

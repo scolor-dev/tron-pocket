@@ -5,21 +5,25 @@ import { useWalletStore } from "@/stores/wallet";
 import { NETWORK_INFO } from "@/lib/constants";
 import AddressDisplay from "@/components/wallet/AddressDisplay.vue";
 import BalanceCard from "@/components/wallet/BalanceCard.vue";
+import ResourceCard from "@/components/wallet/ResourceCard.vue";
 import Button from "@/components/ui/Button.vue";
 
 const wallet = useWalletStore();
 
-onMounted(() => {
+function refresh() {
   wallet.refreshBalances();
-});
+  wallet.refreshResources();
+}
+
+onMounted(refresh);
 </script>
 
 <template>
   <div class="mx-auto max-w-2xl space-y-6">
     <div class="flex items-center justify-between">
       <h1 class="text-2xl font-semibold text-gray-100">ホーム</h1>
-      <Button variant="secondary" :disabled="wallet.balancesLoading" @click="wallet.refreshBalances()">
-        {{ wallet.balancesLoading ? "更新中..." : "残高を更新" }}
+      <Button variant="secondary" :disabled="wallet.balancesLoading || wallet.resourcesLoading" @click="refresh">
+        {{ wallet.balancesLoading || wallet.resourcesLoading ? "更新中..." : "残高を更新" }}
       </Button>
     </div>
 
@@ -38,6 +42,21 @@ onMounted(() => {
         name="Tether USD"
         :balance="wallet.balances.usdt"
         :loading="wallet.balancesLoading"
+      />
+    </div>
+
+    <div class="grid grid-cols-1 gap-4 sm:grid-cols-2">
+      <ResourceCard
+        label="帯域幅 (Bandwidth)"
+        :available="wallet.resources.bandwidth_available"
+        :limit="wallet.resources.bandwidth_limit"
+        :loading="wallet.resourcesLoading"
+      />
+      <ResourceCard
+        label="エネルギー (Energy)"
+        :available="wallet.resources.energy_available"
+        :limit="wallet.resources.energy_limit"
+        :loading="wallet.resourcesLoading"
       />
     </div>
 
